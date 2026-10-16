@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111827">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="シリアルスキャン">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./icon-192.png">
+<title>シリアル一括スキャナー</title>
+<script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
+<style>
+:root{color-scheme:light dark;--bg:#111827;--panel:#1f2937;--line:#374151;--text:#f9fafb;--muted:#9ca3af;--accent:#60a5fa;--good:#34d399;--warn:#fbbf24;--bad:#f87171}
+*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text);padding:env(safe-area-inset-top) 16px env(safe-area-inset-bottom);max-width:720px;margin-inline:auto}
+header{padding:22px 0 10px}h1{font-size:24px;margin:0 0 6px}p{line-height:1.5}.sub,.hint{color:var(--muted);font-size:14px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px;margin:14px 0}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+button,.filebutton{border:0;border-radius:12px;padding:12px 14px;font-size:15px;font-weight:650;background:var(--accent);color:#111827;min-height:44px;display:inline-flex;align-items:center;justify-content:center}
+button.secondary{background:#374151;color:var(--text);border:1px solid #4b5563}button.danger{background:#7f1d1d;color:white}button:disabled{opacity:.45}
+.status{font-size:14px;min-height:24px;margin:10px 0;color:var(--muted)}.status.good{color:var(--good)}.status.warn{color:var(--warn)}.status.bad{color:var(--bad)}
+.progress{height:8px;background:#374151;border-radius:20px;overflow:hidden;margin:10px 0}.progress>div{height:100%;width:0;background:var(--good);transition:width .2s}
+ol{padding-left:28px;margin:0}li{padding:8px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}li:last-child{border-bottom:0}.serial{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px;letter-spacing:.04em}
+.itemrow{display:flex;align-items:center;gap:8px}.itemrow .serial{flex:1;min-width:0}.itemrow button{padding:8px 10px;min-height:36px;font-size:13px}
+input[type=file]{display:none}input[type=text]{flex:1;min-width:180px;padding:12px;border-radius:10px;border:1px solid var(--line);font-size:16px;background:#111827;color:white}
+#preview{display:none;width:100%;max-height:320px;object-fit:contain;border-radius:12px;margin-top:10px;background:#0b1220}
+footer{padding:8px 0 28px;color:var(--muted);font-size:12px;line-height:1.5}
+</style>
+</head>
+<body>
+<header><h1>シリアル一括スキャナー</h1><div class="sub">写真1枚から複数QRコードを検出・最大10件</div></header>
+<section class="panel">
+  <strong>① QRコード10枚をまとめて撮影</strong>
+  <p class="hint">紙を重ならないように並べ、QRコード全体が写るように撮影してください。写真はこのページ内で解析します。</p>
+  <div class="row">
+    <label class="filebutton" for="photo">写真を撮影／選択</label>
+    <input id="photo" type="file" accept="image/*" capture="environment">
+    <button id="analyze" disabled>写真を解析</button>
+  </div>
+  <img id="preview" alt="撮影した写真のプレビュー">
+  <div class="progress"><div id="bar"></div></div>
+  <div id="status" class="status">写真を撮影または選択してください。</div>
+  <div class="hint">うまく読めない場合：明るい場所で真上から撮る、コード同士を離す、ピントを合わせる、写真をトリミングして再解析する、などを試してください。</div>
+</section>
+<section class="panel">
+  <div class="row" style="justify-content:space-between"><strong>② 読み取り結果</strong><span id="count">0 / 10 件</span></div>
+  <ol id="list"></ol><p id="empty" class="hint">まだ読み取り結果はありません。</p>
+  <div class="row">
+    <button id="copyAll" disabled>一覧をコピー</button>
+    <button id="saveTxt" class="secondary" disabled>TXT保存</button>
+    <button id="clear" class="danger" disabled>全件削除</button>
+  </div>
+  <p class="hint">一覧コピーは改行区切りです。応募フォームへの自動入力や応募送信は行いません。</p>
+</section>
+<section class="panel">
+  <strong>読み取れなかったコードを手入力</strong>
+  <div class="row" style="margin-top:10px">
+    <input id="manual" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="シリアル番号">
+    <button id="addManual">追加</button>
+  </div>
+</section>
+<footer>読み取った文字列は外部サーバーへ送信せず、ページ内のメモリだけで扱います。ページを閉じると一覧は消えます。QRの内容が想定外でもURLを自動で開きません。複数検出の成否は写真の画質・QRコードの大きさ・間隔に左右されます。ライブラリの読み込みにはインターネット接続が必要です。</footer>
+<script>
+(() => {
+  const MAX=10, serials=[];
+  let selectedFile=null, busy=false;
+  const $=id=>document.getElementById(id);
+  const setStatus=(s,k="")=>{$("status").textContent=s;$("status").className="status "+k};
+  const normalize=s=>String(s??"").trim().replace(/\s+/g,"");
+  function addValue(raw) {
+    const v=normalize(raw);
+    if(!v) return false;
+    if(/^https?:\/\//i.test(v)) return false;
+    if(serials.includes(v)) return false;
+    if(serials.length>=MAX) return false;
+    serials.push(v); return true;
+  }
+  function render() {
+    $("count").textContent=`${serials.length} / ${MAX} 件`;
+    $("bar").style.width=`${serials.length/MAX*100}%`;
+    $("list").replaceChildren();
+    serials.forEach((v,i)=>{
+      const li=document.createElement("li"), row=document.createElement("div");
+      row.className="itemrow";
+      const code=document.createElement("span");code.className="serial";code.textContent=v;
+      const cp=document.createElement("button");cp.className="secondary";cp.textContent="コピー";cp.onclick=()=>copyText(v);
+      const del=document.createElement("button");del.className="secondary";del.textContent="削除";del.onclick=()=>{serials.splice(i,1);render();setStatus("一覧を更新しました。","good")};
+      row.append(code,cp,del);li.append(row);$("list").append(li);
+    });
+    $("empty").hidden=serials.length>0;
+    $("copyAll").disabled=$("saveTxt").disabled=$("clear").disabled=serials.length===0;
+    $("bar").style.background=serials.length===MAX?"var(--good)":"var(--accent)";
+  }
+  async function copyText(t){
+    try{await navigator.clipboard.writeText(t);setStatus("クリップボードにコピーしました。","good")}
+    catch{const ta=document.createElement("textarea");ta.value=t;document.body.append(ta);ta.select();const ok=document.execCommand("copy");ta.remove();setStatus(ok?"コピーしました。":"コピーできませんでした。",ok?"good":"bad")}
+  }
+  $("photo").addEventListener("change",()=>{
+    selectedFile=$("photo").files?.[0]||null;
+    $("analyze").disabled=!selectedFile;
+    if(!selectedFile)return;
+    const url=URL.createObjectURL(selectedFile);
+    $("preview").src=url;$("preview").style.display="block";
+    $("preview").onload=()=>URL.revokeObjectURL(url);
+    setStatus("写真を選択しました。「写真を解析」を押してください。");
+  });
+  async function decodeCanvas(canvas) {
+    const ctx=canvas.getContext("2d",{willReadFrequently:true});
+    const imageData=ctx.getImageData(0,0,canvas.width,canvas.height);
+    const source=new ZXing.RGBLuminanceSource(imageData.data,canvas.width,canvas.height);
+    const bitmap=new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(source));
+    const reader=new ZXing.QRCodeMultiReader();
+    const hints=new Map();
+    hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
+    reader.setHints?.(hints);
+    try{return reader.decodeMultiple(bitmap).map(r=>r.getText()).filter(Boolean)}catch(e){return []}
+  }
+  async function analyze() {
+    if(!selectedFile||busy)return;
+    if(!window.ZXing||!ZXing.QRCodeMultiReader){setStatus("QR解析ライブラリを読み込めません。通信状態を確認してください。","bad");return}
+    busy=true;$("analyze").disabled=true;setStatus("写真を解析しています…");
+    try{
+      const img=new Image(), url=URL.createObjectURL(selectedFile);
+      await new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=reject;img.src=url});
+      // Limit the working image to reduce memory use while retaining useful detail.
+      const maxSide=2600, scale=Math.min(1,maxSide/Math.max(img.naturalWidth,img.naturalHeight));
+      const canvas=document.createElement("canvas");
+      canvas.width=Math.max(1,Math.round(img.naturalWidth*scale));canvas.height=Math.max(1,Math.round(img.naturalHeight*scale));
+      const ctx=canvas.getContext("2d",{willReadFrequently:true});
+      ctx.drawImage(img,0,0,canvas.width,canvas.height);
+      URL.revokeObjectURL(url);
+      let found=await decodeCanvas(canvas);
+      // If fewer than expected are found, also scan overlapping image quadrants.
+      if(found.length<MAX){
+        const crops=[
+          [0,0,0.56,0.56],[0.44,0,0.56,0.56],
+          [0,0.44,0.56,0.56],[0.44,0.44,0.56,0.56]
+        ];
+        for(const [x,y,w,h] of crops){
+          const crop=document.createElement("canvas");
+          crop.width=Math.round(canvas.width*w);crop.height=Math.round(canvas.height*h);
+          crop.getContext("2d",{willReadFrequently:true}).drawImage(canvas,
+            Math.round(canvas.width*x),Math.round(canvas.height*y),crop.width,crop.height,
+            0,0,crop.width,crop.height);
+          found.push(...await decodeCanvas(crop));
+        }
+      }
+      let added=0, duplicates=0, urls=0;
+      for(const value of found){
+        if(/^https?:\/\//i.test(normalize(value))){urls++;continue}
+        if(serials.includes(normalize(value))){duplicates++;continue}
+        if(serials.length>=MAX)break;
+        if(addValue(value))added++;
+      }
+      render();
+      if(found.length===0)setStatus("QRコードを検出できませんでした。写真を撮り直すか、明るさ・間隔を調整してください。","warn");
+      else if(serials.length===MAX)setStatus(`解析完了：${added}件追加。合計10件です。重複${duplicates}件。全件を確認してください。`,"good");
+      else setStatus(`解析完了：検出候補${found.length}件、追加${added}件、重複${duplicates}件。現在${serials.length}/10件です。${urls?" URL形式は除外しました。":""}不足分は写真を撮り直すか手入力してください。`,serials.length?"good":"warn");
+    }catch(e){setStatus("写真を解析できませんでした。別の写真で試してください。","bad")}
+    finally{busy=false;$("analyze").disabled=!selectedFile}
+  }
+  $("analyze").addEventListener("click",analyze);
+  $("addManual").addEventListener("click",()=>{
+    const v=$("manual").value;
+    if(!v.trim()){setStatus("シリアル番号を入力してください。","warn");return}
+    if(addValue(v)){$("manual").value="";render();setStatus("手入力で追加しました。","good")}
+    else setStatus("追加できません。空欄・URL・重複・10件超過を確認してください。","warn");
+  });
+  $("manual").addEventListener("keydown",e=>{if(e.key==="Enter")$("addManual").click()});
+  $("copyAll").onclick=()=>copyText(serials.join("\n"));
+  $("saveTxt").onclick=()=>{
+    const blob=new Blob([serials.join("\n")+"\n"],{type:"text/plain;charset=utf-8"});
+    const url=URL.createObjectURL(blob),a=document.createElement("a");
+    a.href=url;a.download="serials.txt";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  };
+  $("clear").onclick=()=>{if(confirm("読み取り結果をすべて削除しますか？")){serials.length=0;render();setStatus("全件削除しました。")}};
+  render();
+})();
+</script>
+<script>
+if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(() => {}));
+}
+</script>
+</body>
+</html>

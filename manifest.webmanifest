@@ -1,0 +1,22 @@
+{
+  "name": "シリアル一括スキャナー",
+  "short_name": "シリアルスキャン",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#111827",
+  "theme_color": "#111827",
+  "description": "写真1枚から複数のQRコードを読み取り、シリアルを一覧化します。",
+  "icons": [
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
